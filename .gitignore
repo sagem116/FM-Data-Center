@@ -1,0 +1,8 @@
+node_modules
+dist
+.vscode
+.idea
+*.local
+*.log
+coverage
+.DS_Store
