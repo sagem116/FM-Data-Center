@@ -1,24 +1,46 @@
 import type { ImportKind, WorkbookSnapshot } from './types'
 import { normalizeKey } from './normalizers'
 
-const rules: Array<{ kind: ImportKind; score: (snapshot: WorkbookSnapshot) => number }> = [
-  { kind: 'statistics', score: (s) => score(s, ['superliga', 'nacional', 'continental', 'internacional'], ['competicao', 'nome', 'jogos', 'idu']) },
-  { kind: 'standings', score: (s) => score(s, ['super league', 'ligas nacionais', 'continentais', 'internacionais'], ['equipa', 'vencedor', 'pos']) },
-  { kind: 'clubs', score: (s) => score(s, ['reputacao de clubes', 'pais clubes'], ['club name', 'reputacao', 'continente']) },
-  { kind: 'coaches', score: (s) => score(s, ['dados treinadores'], ['idu', 'nome', 'funcao no clube']) },
-  { kind: 'players', score: (s) => score(s, ['perfil dos jogadores'], ['idu', 'nome', 'posicao', 'idade']) },
-  { kind: 'competitions', score: (s) => score(s, ['reputacao competicoes'], ['competicao', 'reputacao']) },
-  { kind: 'transfers', score: (s) => score(s, ['resultado combinado'], ['data', 'pessoa', 'de', 'para', 'valor']) },
-]
+const normalizedHeaders = (headers: string[]) => new Set(headers.map(normalizeKey))
+const has = (set: Set<string>, ...values: string[]) => values.some((value) => set.has(normalizeKey(value)))
+const count = (set: Set<string>, values: string[]) => values.filter((value) => set.has(normalizeKey(value))).length
 
-function score(snapshot: WorkbookSnapshot, sheetTokens: string[], headerTokens: string[]): number {
-  const sheetNames = snapshot.sheets.map((sheet) => normalizeKey(sheet.name))
-  const headers = snapshot.sheets.flatMap((sheet) => sheet.headers.map(normalizeKey))
-  return sheetTokens.filter((token) => sheetNames.includes(normalizeKey(token))).length * 3
-    + headerTokens.filter((token) => headers.includes(normalizeKey(token))).length
-}
-
+/**
+ * Detects imports by distinctive column signatures. Sheet names are only used
+ * as a final hint because FM reuses names such as "Ligas Nacionais" in
+ * standings and player-statistics exports.
+ */
 export function detectImportKind(snapshot: WorkbookSnapshot): ImportKind | null {
-  const ranked = rules.map((rule) => ({ kind: rule.kind, score: rule.score(snapshot) })).sort((a, b) => b.score - a.score)
-  return ranked[0]?.score > 1 ? ranked[0].kind : null
+  const sheetHeaders = snapshot.sheets.map((sheet) => normalizedHeaders(sheet.headers))
+  const all = new Set(snapshot.sheets.flatMap((sheet) => sheet.headers.map(normalizeKey)))
+
+  // Exact two-column reputation export. This must run before generic standings/statistics checks.
+  if (sheetHeaders.some((headers) => headers.size <= 6 && has(headers, 'competition', 'competicao', 'competiçao', 'competição') && has(headers, 'reputacao', 'reputação'))) {
+    return 'competitions'
+  }
+
+  if (count(all, ['data', 'pessoa', 'de', 'para', 'valor']) >= 4) return 'transfers'
+
+  if (has(all, 'club name', 'club') && count(all, ['reputacao', 'assistencia media', 'pais', 'continente', 'financas', 'salario usado']) >= 2) return 'clubs'
+
+  if (has(all, 'funcao no clube', 'funcao internacional') || count(all, ['jogadores vendidos', 'jogadores contratados', '% vitorias', 'titulos', 'promocoes']) >= 3) {
+    return 'coaches'
+  }
+
+  if (has(all, 'posicao', 'posicao sec', 'personalidade') && count(all, ['idade', 'altura', 'peso', 'pe direito', 'pe esquerdo', 'nac']) >= 2) {
+    return 'players'
+  }
+
+  const statisticsSheet = sheetHeaders.some((headers) => {
+    const identity = count(headers, ['nome', 'idu', 'jogos', 'competicao', 'equipa', 'clube'])
+    const metrics = count(headers, ['gls', 'ast', 'xg', '% passe', 'des/90', 'fnt/90', '% remates', 'cl med', 'c.a.', 'c.p.', 'vp', 'salario'])
+    return identity >= 3 && metrics >= 2
+  })
+  if (statisticsSheet) return 'statistics'
+
+  const leagueSignature = count(all, ['competicao', 'equipa', 'pos', 'pts', 'gm', 'gs'])
+  const knockoutSignature = count(all, ['competicao', 'equipa 1', 'equipa 2', 'meia final equipa 1', 'quartos de final equipa 1'])
+  if (leagueSignature >= 4 || knockoutSignature >= 4) return 'standings'
+
+  return null
 }

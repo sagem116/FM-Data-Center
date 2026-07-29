@@ -1,0 +1,2 @@
+import {describe,expect,it} from 'vitest';import {CHALLENGE_PRESETS} from '../src/modules/challenges/challenges'
+describe('desafios antigos',()=>{it('mantém os 15 presets',()=>expect(CHALLENGE_PRESETS).toHaveLength(15));it('mantém bónus principais',()=>{expect(CHALLENGE_PRESETS.find(x=>x.id==='preset-tri-campeao-superleague')?.bonus).toBe(1500);expect(CHALLENGE_PRESETS.find(x=>x.id==='preset-colecao-continental')?.bonus).toBe(4000)})})

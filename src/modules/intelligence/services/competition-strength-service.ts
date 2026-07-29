@@ -1,0 +1,40 @@
+import { db } from '../../../database/db'
+import { normalizeKey } from '../../imports/core/normalizers'
+import { loadMarketData } from '../../market/services/market-service'
+
+export interface StrengthWeights{reputation:number;currentAbility:number;potentialAbility:number;marketValue:number;wages:number;competitiveBalance:number;depth:number;marketPower:number;coachQuality:number;internationalReach:number}
+export const DEFAULT_STRENGTH_WEIGHTS:StrengthWeights={reputation:15,currentAbility:18,potentialAbility:10,marketValue:12,wages:8,competitiveBalance:10,depth:8,marketPower:8,coachQuality:5,internationalReach:6}
+export interface CompetitionStrengthRow{id:string;name:string;type:string;country?:string;continent?:string;seasonId:string;clubs:number;players:number;reputation?:number;averageCA?:number;averagePA?:number;averageMarketValue?:number;averageWage?:number;balance?:number;depth?:number;marketPower?:number;coachQuality?:number;internationalReach?:number;score:number;tier:string;coverage:number;components:Record<keyof StrengthWeights,{raw?:number;normalized:number;weight:number;contribution:number}>;summary:string}
+const avg=(v:number[])=>v.length?v.reduce((a,b)=>a+b,0)/v.length:undefined
+const sd=(v:number[])=>{const a=avg(v);return a===undefined?undefined:Math.sqrt(v.reduce((s,x)=>s+(x-a)**2,0)/v.length)}
+const percentile=(v:number,arr:number[])=>arr.length<2?50:arr.filter(x=>x<=v).length/arr.length*100
+const aliases=(record:Record<string,number|null>,names:string[])=>{const wanted=new Set(names.map(x=>normalizeKey(x)));for(const [k,v] of Object.entries(record))if(typeof v==='number'&&wanted.has(normalizeKey(k)))return v;return undefined}
+export function loadStrengthWeights():StrengthWeights{try{return{...DEFAULT_STRENGTH_WEIGHTS,...JSON.parse(localStorage.getItem('fm-strength-weights-v1')??'{}')}}catch{return{...DEFAULT_STRENGTH_WEIGHTS}}}
+export function saveStrengthWeights(v:StrengthWeights){localStorage.setItem('fm-strength-weights-v1',JSON.stringify(v))}
+let cache=new Map<string,Promise<{rows:CompetitionStrengthRow[];seasons:Array<{id:string;label:string}>}>>()
+export function clearStrengthCache(){cache.clear()}
+export async function loadCompetitionStrength(seasonId?:string,weights=loadStrengthWeights(),force=false){
+  const cacheKey=`${seasonId??'latest'}:${JSON.stringify(weights)}`;if(force)cache.delete(cacheKey);const hit=cache.get(cacheKey);if(hit)return hit
+  const promise=(async()=>{
+    const [seasons,competitions,stats,playerSeasons,general,standings,clubSeasons,coaches,coachSeasons,market]=await Promise.all([db.seasons.orderBy('startYear').reverse().toArray(),db.competitions.toArray(),db.playerCompetitionStats.toArray(),db.playerSeasons.toArray(),db.playerGeneralMetrics.toArray(),db.standings.toArray(),db.clubSeasons.toArray(),db.coaches.toArray(),db.coachSeasons.toArray(),loadMarketData()])
+    const selected=seasonId??seasons[0]?.id;if(!selected)return{rows:[],seasons:[]}
+    const psMap=new Map(playerSeasons.filter(x=>x.seasonId===selected).map(x=>[x.playerId,x]));const gmMap=new Map(general.filter(x=>x.seasonId===selected).map(x=>[x.playerId,x.metrics]));const clubSeasonMap=new Map(clubSeasons.filter(x=>x.seasonId===selected).map(x=>[x.clubId,x]))
+    const statsByComp=new Map<string,typeof stats>();for(const row of stats)if(row.seasonId===selected){const list=statsByComp.get(row.competitionId)??[];list.push(row);statsByComp.set(row.competitionId,list)}
+    const standingsByComp=new Map<string,typeof standings>();for(const row of standings)if(row.seasonId===selected){const list=standingsByComp.get(row.competitionId)??[];list.push(row);standingsByComp.set(row.competitionId,list)}
+    const coachMap=new Map(coaches.map(x=>[x.id,x]));const coachByClub=new Map<string,number[]>();for(const cs of coachSeasons)if(cs.seasonId===selected&&cs.currentClubId){const list=coachByClub.get(cs.currentClubId)??[];const rep=aliases(cs.metrics,['reputacao','reputation'])??cs.winRate;if(rep!==undefined)list.push(rep);coachByClub.set(cs.currentClubId,list)}
+    const raw=competitions.map(comp=>{
+      const rows=statsByComp.get(comp.id)??[];const uniquePlayers=[...new Set(rows.map(x=>x.playerId))];const clubIds=[...new Set(rows.map(x=>x.clubId).filter((x):x is string=>Boolean(x)))];const ca=uniquePlayers.map(id=>aliases(gmMap.get(id)??{},['ca','c.a.','current ability'])).filter((x):x is number=>x!==undefined);const pa=uniquePlayers.map(id=>aliases(gmMap.get(id)??{},['pa','c.p.','potential ability'])).filter((x):x is number=>x!==undefined);const values=uniquePlayers.map(id=>psMap.get(id)?.marketValue).filter((x):x is number=>x!==undefined);const wages=uniquePlayers.map(id=>psMap.get(id)?.wageAnnual).filter((x):x is number=>x!==undefined)
+      const table=(standingsByComp.get(comp.id)??[]).filter(x=>x.format==='league'&&x.points!==undefined&&x.played);const ppg=table.map(x=>(x.points??0)/(x.played||1));const spread=sd(ppg);const balance=spread===undefined?undefined:Math.max(0,100-spread*35)
+      const clubStrength=clubIds.map(id=>clubSeasonMap.get(id)?.reputation).filter((x):x is number=>x!==undefined).sort((a,b)=>a-b);const depth=clubStrength.length?avg(clubStrength.slice(0,Math.max(1,Math.ceil(clubStrength.length*.25)))):undefined
+      const marketTransfers=market.transfers.filter(t=>t.seasonId===selected&&t.to.competitions.some(c=>c.id===comp.id));const marketPower=marketTransfers.reduce((s,t)=>s+t.effectiveFee,0)
+      const coachQuality=avg(clubIds.flatMap(id=>coachByClub.get(id)??[]));const foreign=marketTransfers.filter(t=>t.domestic===false).length;const internationalReach=marketTransfers.length?foreign/marketTransfers.length*100:undefined
+      return{id:comp.id,name:comp.name,type:comp.type,country:comp.country,continent:comp.continent,seasonId:selected,clubs:clubIds.length,players:uniquePlayers.length,reputation:comp.reputation,averageCA:avg(ca),averagePA:avg(pa),averageMarketValue:avg(values),averageWage:avg(wages),balance,depth,marketPower,coachQuality,internationalReach}
+    }).filter(x=>x.players||x.clubs||x.reputation!==undefined)
+    const keys:(keyof StrengthWeights)[]=['reputation','currentAbility','potentialAbility','marketValue','wages','competitiveBalance','depth','marketPower','coachQuality','internationalReach']
+    const rawFor=(r:typeof raw[number],k:keyof StrengthWeights)=>({reputation:r.reputation,currentAbility:r.averageCA,potentialAbility:r.averagePA,marketValue:r.averageMarketValue,wages:r.averageWage,competitiveBalance:r.balance,depth:r.depth,marketPower:r.marketPower,coachQuality:r.coachQuality,internationalReach:r.internationalReach}[k])
+    const distributions=new Map(keys.map(k=>[k,raw.map(r=>rawFor(r,k)).filter((x):x is number=>x!==undefined)]))
+    const totalWeight=Object.values(weights).reduce((a,b)=>a+b,0)||1
+    const rows:CompetitionStrengthRow[]=raw.map(r=>{const components={} as CompetitionStrengthRow['components'];let availableWeight=0,total=0;for(const k of keys){const rv=rawFor(r,k);const normalized=rv===undefined?0:percentile(rv,distributions.get(k)??[]);if(rv!==undefined)availableWeight+=weights[k];const contribution=normalized*weights[k]/totalWeight;total+=contribution;components[k]={raw:rv,normalized:Number(normalized.toFixed(1)),weight:weights[k],contribution:Number(contribution.toFixed(2))}}const coverage=availableWeight/totalWeight*100;const score=Number(total.toFixed(1));const tier=score>=85?'Elite mundial':score>=72?'Liga de topo':score>=58?'Competição forte':score>=45?'Nível médio':score>=30?'Competição emergente':'Baixa intensidade';return{...r,score,tier,coverage:Number(coverage.toFixed(1)),components,summary:`${tier}: C.A. média ${r.averageCA?.toFixed(1)??'—'}, equilíbrio ${r.balance?.toFixed(1)??'—'} e poder de mercado ${r.marketPower!==undefined?new Intl.NumberFormat('pt-PT',{style:'currency',currency:'EUR',notation:'compact'}).format(r.marketPower):'—'}.`}}).sort((a,b)=>b.score-a.score)
+    return{rows,seasons:seasons.map(s=>({id:s.id,label:s.label}))}
+  })().catch(e=>{cache.delete(cacheKey);throw e});cache.set(cacheKey,promise);return promise
+}

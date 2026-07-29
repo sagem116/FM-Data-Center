@@ -1,27 +1,38 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Panel } from '../../../shared/components/Panel'
 import { collectDiagnostics, type DiagnosticsSnapshot } from '../services/diagnostics-service'
 import { inspectImportedData, type DataInspectionSnapshot } from '../../imports/services/import-inspection-service'
+import { IMPORT_COMPLETED_EVENT } from '../../imports/services/import-events'
 
 export function DiagnosticsPage() {
   const [data, setData] = useState<DiagnosticsSnapshot | null>(null)
   const [inspection, setInspection] = useState<DataInspectionSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const [nextData, nextInspection] = await Promise.all([collectDiagnostics(), inspectImportedData()])
       setData(nextData); setInspection(nextInspection); setError(null)
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Erro no diagnóstico') }
-  }
+  }, [])
 
-  useEffect(() => { void refresh() }, [])
+  useEffect(() => {
+    void refresh()
+    const handleImport = () => void refresh()
+    window.addEventListener(IMPORT_COMPLETED_EVENT, handleImport)
+    window.addEventListener('focus', handleImport)
+    return () => {
+      window.removeEventListener(IMPORT_COMPLETED_EVENT, handleImport)
+      window.removeEventListener('focus', handleImport)
+    }
+  }, [refresh])
   const rows = data ? [['Duplicados por IDU', data.duplicateUids], ['Jogadores com identidade fraca', data.lowConfidencePlayers], ['Épocas de jogador órfãs', data.orphanPlayerSeasons], ['Estatísticas órfãs', data.orphanStats], ['Avisos registados', data.warnings], ['Erros registados', data.errors]] : []
 
   return <div className="page-stack">
     <Panel title="Centro de diagnóstico" description="Integridade real da base de dados e das importações.">
       <button className="primary-button" onClick={() => void refresh()}>Atualizar diagnóstico</button>
       {error && <div className="import-message">{error}</div>}
+      {!!inspection?.partialErrors.length && <div className="import-message">Algumas amostras não puderam ser carregadas: {inspection.partialErrors.join(' | ')}</div>}
       <div className="diagnostic-counters"><span>Jogadores <strong>{data?.players ?? '—'}</strong></span><span>Clubes <strong>{data?.clubs ?? '—'}</strong></span><span>Competições <strong>{data?.competitions ?? '—'}</strong></span><span>Épocas <strong>{data?.seasons ?? '—'}</strong></span></div>
       <div className="diagnostic-table" role="table"><div className="diagnostic-table__row diagnostic-table__head"><span>Verificação</span><span>Estado</span><span>Resultado</span></div>{rows.map(([label, value]) => <div className="diagnostic-table__row" key={String(label)}><span>{label}</span><span className={Number(value) === 0 ? 'status-ok' : 'status-error'}>{Number(value) === 0 ? 'OK' : 'Atenção'}</span><span>{value}</span></div>)}</div>
     </Panel>

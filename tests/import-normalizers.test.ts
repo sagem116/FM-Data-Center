@@ -5,6 +5,8 @@ describe('normalizadores de importação', () => {
   it('interpreta valores monetários FM', () => {
     expect(parseMoney('42M € (55M €)')).toMatchObject({ guaranteed: 42_000_000, possible: 55_000_000, currency: 'EUR' })
     expect(parseMoney('603,000 € p/a').guaranteed).toBe(603000)
+    expect(parseMoney('375m €').guaranteed).toBe(375000)
+    expect(parseMoney('42M €').guaranteed).toBe(42000000)
   })
   it('interpreta jogos e suplências', () => {
     expect(parseAppearances('8 (3)')).toEqual({ starts: 8, substitute: 3, total: 11 })

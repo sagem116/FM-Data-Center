@@ -25,6 +25,25 @@ export class FmDatabase extends Dexie {
       importSessions: 'id, seasonId, importType, status, startedAt, [seasonId+importType]',
       importIssues: 'id, importSessionId, severity, code, [importSessionId+severity]'
     })
+
+    this.version(3).stores({
+      seasons: 'id, &label, startYear, endYear',
+      players: 'id, uid, name, normalizedName, &identityKey, identityConfidence',
+      playerSeasons: 'id, playerId, seasonId, clubId, &[playerId+seasonId]',
+      playerAttributes: 'id, playerId, seasonId, &[playerId+seasonId]',
+      playerGeneralMetrics: 'id, playerId, seasonId, &[playerId+seasonId]',
+      playerCompetitionStats: 'id, playerId, seasonId, competitionId, clubId, &[playerId+seasonId+competitionId+clubId]',
+      clubs: 'id, uid, name, normalizedName, country, continent',
+      clubSeasons: 'id, clubId, seasonId, &[clubId+seasonId]',
+      competitions: 'id, uid, name, normalizedName, type, country, continent',
+      competitionSeasons: 'id, competitionId, seasonId, &[competitionId+seasonId]',
+      coaches: 'id, uid, name, normalizedName, &identityKey, identityConfidence',
+      coachSeasons: 'id, coachId, seasonId, currentClubId, [coachId+seasonId]',
+      standings: 'id, seasonId, competitionId, entityId, format, stage, &[seasonId+competitionId+entityName+stage]',
+      transfers: 'id, seasonId, playerId, fromClubId, toClubId, transferDate',
+      importSessions: 'id, seasonId, importType, status, startedAt, [seasonId+importType]',
+      importIssues: 'id, importSessionId, severity, code, [importSessionId+severity]'
+    })
   }
 }
 export const db = new FmDatabase()

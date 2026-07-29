@@ -2,9 +2,9 @@
 
 ## Objetivo
 
-Construir uma aplicação local e modular para análise de dados exportados do Football Manager.
+Construir uma aplicação local, modular e auditável para importar e analisar dados exportados do Football Manager.
 
-## Módulos
+## Domínios
 
 1. Importação
 2. Rankings
@@ -15,35 +15,32 @@ Construir uma aplicação local e modular para análise de dados exportados do F
 
 ## Regras técnicas
 
-- React, TypeScript estrito e Vite.
-- IndexedDB através de Dexie.
-- Zod para validação.
-- Vitest para testes.
-- Não utilizar `any` ou `ts-ignore`.
-- Não guardar dados principais em localStorage.
-- Não colocar fórmulas em componentes React.
-- Cada domínio deve ter serviços e tipos próprios.
-- Apenas um motor canónico de Rankings.
-- Apenas um motor canónico de Scores.
+- Usar React, Vite e TypeScript estrito.
+- Não usar `any`, `ts-ignore` ou fallbacks silenciosos.
+- IndexedDB/Dexie é a fonte principal de dados locais.
+- Não guardar dados principais em `localStorage`.
+- Manter lógica de negócio fora dos componentes React.
 - IDU é a identidade principal de jogadores e treinadores.
 - Separar identidade permanente dos dados por época.
 - Reimportações não podem alterar outras épocas.
 - Importações devem ser transacionais.
-- Nunca apagar dados antigos antes de validar os novos.
+- Nunca apagar dados antigos antes de validar e iniciar a escrita dos novos.
+- Rankings e Scores terão um único motor canónico cada.
+- Erros devem indicar, quando possível, ficheiro, folha, linha, coluna e motivo.
 
 ## Validação obrigatória
 
-Antes de terminar uma tarefa executar:
+Antes de concluir uma tarefa, executar:
 
+```bash
 npm run typecheck
 npm test
 npm run build
+```
 
-Não considerar a tarefa concluída enquanto algum destes comandos falhar.
+Não considerar a tarefa concluída enquanto algum comando falhar.
 
 ## Git
 
-- Não trabalhar diretamente em `main`.
-- Criar uma branch por fase.
-- Fazer commits pequenos e descritivos.
-- Não incluir node_modules, dist ou ficheiros temporários.
+- Não incluir `node_modules`, `dist`, `coverage` ou ficheiros temporários.
+- Preferir branches por fase e commits pequenos e descritivos.

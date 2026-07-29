@@ -38,4 +38,5 @@ export interface ImportPreview {
   validRows: number
   warningRows: number
   errorRows: number
+  sourceSheets: string[]
 }

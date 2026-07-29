@@ -1,0 +1,51 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Download, RefreshCw, Wrench } from 'lucide-react'
+import { Panel } from '../../../shared/components/Panel'
+import { db } from '../../../database/db'
+import { clearScoreDataCache } from '../../scores/services/scores-service'
+import { SCORE_FEATURE_ALIASES_EVENT } from '../../scores/engine/feature-aliases'
+import { collectScoreDebug, disableScoreFeature, exportScoreDebug, mapScoreFeature, normalizeRoleWeights, renameScoreRole, setRoleAllPositions, type ScoreDebugIssue, type ScoreDebugSnapshot } from '../services/score-debug-service'
+
+const severityLabel={error:'Erro',warning:'Aviso',info:'Informação'} as const
+function downloadJson(name:string,content:string){const url=URL.createObjectURL(new Blob([content],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=name;link.click();URL.revokeObjectURL(url)}
+
+export function DebugScoresPage(){
+  const [snapshot,setSnapshot]=useState<ScoreDebugSnapshot|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState<string|null>(null)
+  const [seasonId,setSeasonId]=useState(''),[seasons,setSeasons]=useState<Array<{id:string;label:string}>>([]),[query,setQuery]=useState(''),[severity,setSeverity]=useState('all'),[code,setCode]=useState('all')
+  const [mapping,setMapping]=useState<Record<string,string>>({}),[rename,setRename]=useState<Record<string,string>>({}),[page,setPage]=useState(0)
+  const seasonRef=useRef('')
+  const pageSize=100
+  useEffect(()=>{seasonRef.current=seasonId},[seasonId])
+  const refresh=useCallback(async(force=false,requestedSeason?:string)=>{setLoading(true);try{if(force)clearScoreDataCache();const seasonRows=await db.seasons.orderBy('startYear').reverse().toArray();const effectiveSeason=requestedSeason||seasonRef.current||seasonRows[0]?.id;const next=await collectScoreDebug(effectiveSeason||undefined);setSnapshot(next);setSeasons(seasonRows.map(item=>({id:item.id,label:item.label})));if(effectiveSeason&&seasonRef.current!==effectiveSeason){seasonRef.current=effectiveSeason;setSeasonId(effectiveSeason)}setError(null)}catch(caught){setError(caught instanceof Error?caught.message:'Erro no Debug Scores')}finally{setLoading(false)}},[])
+  useEffect(()=>{void refresh();const listener=()=>void refresh(true);window.addEventListener(SCORE_FEATURE_ALIASES_EVENT,listener);window.addEventListener('fm-score-config-changed',listener);return()=>{window.removeEventListener(SCORE_FEATURE_ALIASES_EVENT,listener);window.removeEventListener('fm-score-config-changed',listener)}},[refresh])
+  const codes=useMemo(()=>[...new Set(snapshot?.issues.map(item=>item.code)??[])].sort(),[snapshot])
+  const filtered=useMemo(()=>snapshot?.issues.filter(item=>{if(severity!=='all'&&item.severity!==severity)return false;if(code!=='all'&&item.code!==code)return false;const hay=`${item.title} ${item.detail} ${item.roleName??''} ${item.featureId??''}`.toLowerCase();return!query||hay.includes(query.toLowerCase())})??[],[snapshot,query,severity,code])
+  useEffect(()=>setPage(0),[query,severity,code,seasonId])
+  const pageCount=Math.max(1,Math.ceil(filtered.length/pageSize))
+  const visibleIssues=filtered.slice(page*pageSize,(page+1)*pageSize)
+  const fix=async(action:()=>void)=>{action();await refresh(true)}
+  const mapFeature=async(issue:ScoreDebugIssue)=>{const value=mapping[issue.id]?.trim();if(!value||!issue.featureKind||!issue.featureId)return;mapScoreFeature(issue.featureKind,issue.featureId,value);clearScoreDataCache();await refresh(true)}
+  return <div className="page-stack">
+    <Panel title="Debug Scores" description="Auditoria completa das roles, atributos, métricas, cobertura, pesos, aliases e qualidade dos dados usados pelo motor Scores.">
+      <div className="diagnostic-toolbar"><select value={seasonId} onChange={event=>{const value=event.target.value;setSeasonId(value);seasonRef.current=value;void refresh(true,value)}}>{seasons.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><button className="primary-button" onClick={()=>void refresh(true)}><RefreshCw size={15}/> Atualizar e recalcular</button><button className="secondary-button" disabled={!snapshot} onClick={()=>snapshot&&downloadJson(`debug-scores-${new Date().toISOString().slice(0,10)}.json`,exportScoreDebug(snapshot))}><Download size={15}/> Exportar diagnóstico</button></div>
+      {error&&<div className="import-message status-error">{error}</div>}
+      <div className="debug-summary-grid">
+        <article><span>Jogadores analisados</span><strong>{snapshot?.summary.players.toLocaleString('pt-PT')??'—'}</strong></article><article><span>Roles ativas</span><strong>{snapshot?`${snapshot.summary.activeRoles}/${snapshot.summary.roles}`:'—'}</strong></article><article className="is-error"><span>Erros</span><strong>{snapshot?.summary.errors??'—'}</strong></article><article className="is-warning"><span>Avisos</span><strong>{snapshot?.summary.warnings??'—'}</strong></article><article><span>Métricas/atributos ausentes</span><strong>{snapshot?.summary.missingFeatures??'—'}</strong></article><article><span>Cobertura parcial</span><strong>{snapshot?.summary.partialFeatures??'—'}</strong></article><article><span>Conflitos de configuração</span><strong>{snapshot?.summary.configConflicts??'—'}</strong></article><article><span>Aliases manuais</span><strong>{snapshot?.summary.manualAliases??'—'}</strong></article>
+      </div>
+    </Panel>
+
+    <Panel title="Problemas e correções" description="Os erros corrigíveis podem ser mapeados, normalizados ou desativados diretamente nesta página. As alterações ficam persistentes.">
+      <div className="filter-grid"><input placeholder="Pesquisar role, métrica, atributo ou erro" value={query} onChange={event=>setQuery(event.target.value)}/><select value={severity} onChange={event=>setSeverity(event.target.value)}><option value="all">Todas as severidades</option><option value="error">Erros</option><option value="warning">Avisos</option><option value="info">Informação</option></select><select value={code} onChange={event=>setCode(event.target.value)}><option value="all">Todos os tipos</option>{codes.map(item=><option key={item}>{item}</option>)}</select></div>
+      <div className="debug-issue-list">{loading?<p>A analisar Scores…</p>:visibleIssues.map(issue=><article key={issue.id} className={`debug-issue debug-issue--${issue.severity}`}><div className="debug-issue__icon">{issue.severity==='error'?<AlertTriangle/>:<CheckCircle2/>}</div><div className="debug-issue__body"><div className="debug-issue__title"><strong>{issue.title}</strong><span>{severityLabel[issue.severity]} · {issue.code}</span></div><p>{issue.detail}</p>{issue.featureId&&<small>ID canónico: <code>{issue.featureId}</code>{issue.coverage!==undefined?` · Cobertura ${issue.coverage}%`:''}</small>}
+        {(issue.code==='FEATURE_MISSING'||issue.code==='FEATURE_PARTIAL')&&issue.featureKind&&issue.featureId&&<div className="debug-fix-row"><input list={`suggest-${issue.id}`} placeholder="Chave importada real" value={mapping[issue.id]??''} onChange={event=>setMapping(current=>({...current,[issue.id]:event.target.value}))}/><datalist id={`suggest-${issue.id}`}>{issue.suggestions?.map(item=><option key={item} value={item}/>)}</datalist><button className="primary-button" onClick={()=>void mapFeature(issue)}><Wrench size={14}/> Mapear alias</button>{issue.roleId&&<button className="secondary-button" onClick={()=>void fix(()=>disableScoreFeature(issue.roleId!,issue.featureKind!,issue.featureId!))}>Desativar componente</button>}</div>}
+        {issue.code==='COMPONENT_WEIGHT_CONFLICT'&&issue.roleId&&<div className="debug-fix-row"><button className="primary-button" onClick={()=>void fix(()=>normalizeRoleWeights(issue.roleId!,'components'))}>Normalizar componentes para 100%</button></div>}
+        {issue.code==='FEATURE_WEIGHT_CONFLICT'&&issue.roleId&&issue.featureKind&&<div className="debug-fix-row"><button className="primary-button" onClick={()=>void fix(()=>normalizeRoleWeights(issue.roleId!,issue.featureKind!))}>Normalizar pesos para 100%</button></div>}
+        {issue.code==='DUPLICATE_ROLE_NAME'&&issue.roleId&&<div className="debug-fix-row"><input placeholder="Novo nome da role" value={rename[issue.id]??''} onChange={event=>setRename(current=>({...current,[issue.id]:event.target.value}))}/><button className="primary-button" onClick={()=>void fix(()=>renameScoreRole(issue.roleId!,rename[issue.id]??''))}>Renomear</button></div>}
+        {issue.code==='ROLE_WITHOUT_POSITIONS'&&issue.roleId&&<div className="debug-fix-row"><button className="primary-button" onClick={()=>void fix(()=>setRoleAllPositions(issue.roleId!))}>Aplicar a todas as posições</button></div>}
+      </div></article>)}{!loading&&!filtered.length&&<div className="debug-empty"><CheckCircle2 size={28}/><strong>Sem problemas para estes filtros</strong></div>}</div>
+      {!loading&&filtered.length>pageSize&&<div className="table-pagination"><span>A mostrar {page*pageSize+1}–{Math.min(filtered.length,(page+1)*pageSize)} de {filtered.length}</span><div><button className="secondary-button" disabled={page===0} onClick={()=>setPage(value=>Math.max(0,value-1))}>Anterior</button><span>Página {page+1}/{pageCount}</span><button className="secondary-button" disabled={page>=pageCount-1} onClick={()=>setPage(value=>Math.min(pageCount-1,value+1))}>Seguinte</button></div></div>}
+    </Panel>
+
+    <div className="debug-two-columns"><Panel title="Chaves de atributos disponíveis" description="Nomes canónicos efetivamente presentes nos jogadores importados."><div className="debug-key-cloud">{snapshot?.availableAttributeKeys.slice(0,180).map(item=><span key={item.key}><code>{item.key}</code><small>{item.rows.toLocaleString('pt-PT')} jogadores</small></span>)}</div></Panel><Panel title="Chaves de métricas disponíveis" description="Usa estas chaves ao mapear uma métrica não reconhecida."><div className="debug-key-cloud">{snapshot?.availableMetricKeys.slice(0,220).map(item=><span key={item.key}><code>{item.key}</code><small>{item.rows.toLocaleString('pt-PT')} jogadores</small></span>)}</div></Panel></div>
+  </div>
+}
